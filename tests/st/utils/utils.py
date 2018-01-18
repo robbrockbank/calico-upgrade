@@ -159,7 +159,7 @@ class CalicoctlOutput:
             "\nexpected=\n" + text
 
 
-def calicoctl(command, data=None, load_as_stdin=False, format="yaml"):
+def calicoctl(command, data=None):
     """
     Convenience function for abstracting away calling the calicoctl
     command.
@@ -167,29 +167,14 @@ def calicoctl(command, data=None, load_as_stdin=False, format="yaml"):
     :param command:  The calicoctl command line parms as a single string.
     :param data:  Input data either as a string or a JSON serializable Python
     object.
-    :param load_as_stdin:  Load the input data through stdin rather than by
-    loading from file.
-    :param format:  Specify the format for loading the data.
     :return: The output from the command with leading and trailing
     whitespace removed.
     """
     # If input data is specified, save it to file in the required format.
-    if isinstance(data, str):
-        data, _ = decode_json_yaml(data)
-        assert data is not None, "String data did not decode"
-    if data is not None:
-        if format == "yaml":
-            writeyaml("/tmp/input-data", data)
-        else:
-            writejson("/tmp/input-data", data)
-
-    stdin = ''
     option_file = ''
 
-    if data and load_as_stdin:
-        stdin = 'cat /tmp/input-data | '
-        option_file = ' -f -'
-    elif data and not load_as_stdin:
+    if data:
+        writejson("/tmp/input-data", data)
         option_file = ' -f /tmp/input-data'
 
     calicoctl_bin = os.environ.get("CALICOCTL", "/code/dist/calicoctl")
@@ -198,6 +183,7 @@ def calicoctl(command, data=None, load_as_stdin=False, format="yaml"):
         etcd_auth = "%s:2379" % ETCD_HOSTNAME_SSL
     else:
         etcd_auth = "%s:2379" % get_ip()
+
     # Export the environment, in case the command has multiple parts, e.g.
     # use of | or ;
     #
@@ -206,9 +192,54 @@ def calicoctl(command, data=None, load_as_stdin=False, format="yaml"):
                 "export ETCD_CA_CERT_FILE=%s; " \
                 "export ETCD_CERT_FILE=%s; " \
                 "export ETCD_KEY_FILE=%s; " \
-                "export DATASTORE_TYPE=%s; %s %s" % \
+                "export DATASTORE_TYPE=%s; %s" % \
                 (ETCD_SCHEME+"://"+etcd_auth, ETCD_CA, ETCD_CERT, ETCD_KEY,
-                 "etcdv3", stdin, calicoctl_bin)
+                 "etcdv3", calicoctl_bin)
+    full_cmd = calicoctl_env_cmd + " " + command + option_file
+
+    try:
+        output = log_and_run(full_cmd)
+        return CalicoctlOutput(full_cmd, output)
+    except CalledProcessError as e:
+        return CalicoctlOutput(full_cmd, e.output, error=e.returncode)
+
+
+def calicoupgrade(command):
+    """
+    Convenience function for abstracting away calling the calicoctl
+    command.
+
+    :param command:  The calicoctl command line parms as a single string.
+    :param data:  Input data either as a string or a JSON serializable Python
+    object.
+    :return: The output from the command with leading and trailing
+    whitespace removed.
+    """
+    # If input data is specified, save it to file in the required format.
+    option_file = ''
+
+    if data:
+        writejson("/tmp/input-data", data)
+        option_file = ' -f /tmp/input-data'
+
+    calicoctl_bin = os.environ.get("CALICOCTL", "/code/dist/calicoctl")
+
+    if ETCD_SCHEME == "https":
+        etcd_auth = "%s:2379" % ETCD_HOSTNAME_SSL
+    else:
+        etcd_auth = "%s:2379" % get_ip()
+
+    # Export the environment, in case the command has multiple parts, e.g.
+    # use of | or ;
+    #
+    # Pass in all etcd params, the values will be empty if not set anyway
+    calicoctl_env_cmd = "export ETCD_ENDPOINTS=%s; " \
+                        "export ETCD_CA_CERT_FILE=%s; " \
+                        "export ETCD_CERT_FILE=%s; " \
+                        "export ETCD_KEY_FILE=%s; " \
+                        "export DATASTORE_TYPE=%s; %s" % \
+                        (ETCD_SCHEME+"://"+etcd_auth, ETCD_CA, ETCD_CERT, ETCD_KEY,
+                         "etcdv3", calicoctl_bin)
     full_cmd = calicoctl_env_cmd + " " + command + option_file
 
     try:
@@ -338,7 +369,7 @@ def get_ip(v6=False):
 
 
 # Some of the commands we execute like to mess with the TTY configuration,
-# which can break the output formatting. As a wrokaround, save off the
+# which can break the output formatting. As a workaround, save off the
 # terminal settings and restore them after each command.
 _term_settings = termios.tcgetattr(sys.stdin.fileno())
 
